@@ -4,6 +4,7 @@ const fsSync = require('fs');
 const path = require('path');
 const { Logger } = require('../utils/logger');
 const { assertValidYouTubeMetadata } = require('../utils/youtube-metadata-validator');
+const { getChannelProfile } = require('../utils/channel-profile');
 
 class PublishingSchedulingAgent {
   constructor(db, credentials) {
@@ -219,7 +220,7 @@ class PublishingSchedulingAgent {
       },
       status: {
         privacyStatus: futureSchedule ? 'private' : requestedPrivacy,
-        selfDeclaredMadeForKids: false,
+        selfDeclaredMadeForKids: getChannelProfile().madeForKids,
         containsSyntheticMedia: metadata.containsSyntheticMedia === true
       }
     };
@@ -399,8 +400,8 @@ class PublishingSchedulingAgent {
         requestBody: {
           snippet: {
             videoId: videoId,
-            language: 'en',
-            name: 'English Captions',
+            language: getChannelProfile().language,
+            name: getChannelProfile().captionsName,
             isDraft: false
           }
         },

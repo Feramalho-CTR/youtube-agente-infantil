@@ -1,4 +1,4 @@
-# AgentTube - ECGHuNZSECqTXabaLjkVrTEnguiNZLkKF1qi8oBGpump
+# AgentTube
 
 **The open-source AI agent that runs a YouTube channel end to end.**
 
@@ -7,6 +7,15 @@ Research topics → write scripts → generate narration and visuals → assembl
 [![CI](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darkzOGx/youtube-automation-agent/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js 18+](https://img.shields.io/badge/node-18%2B-43853d.svg)](package.json)
+
+## Canal infantil em português (configuração deste fork)
+
+Este fork roda um canal infantil em português. Duas variáveis do `.env` controlam isso:
+
+- `CONTENT_LANGUAGE=pt-BR`: narração, título, descrição, tags e legendas em português; metadados e legendas sobem para o YouTube como `pt-BR`.
+- `MADE_FOR_KIDS=true`: todo upload é marcado como "conteúdo para crianças" (`selfDeclaredMadeForKids`), exigência do YouTube/COPPA, e todos os prompts de roteiro, imagem e vídeo recebem regras de segurança infantil (sem violência, sustos, marcas ou personagens com direitos autorais).
+
+Sem essas variáveis, o comportamento original (inglês, não infantil) é mantido. As regras ficam em `utils/channel-profile.js`.
 
 ## What's new on master
 

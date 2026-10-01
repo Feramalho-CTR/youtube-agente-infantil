@@ -64,7 +64,8 @@ class SystemTest {
       { name: 'Reply Approval and Posting', test: () => this.testReplyApprovalAndPosting() },
       { name: 'Engagement AI Provider Wiring', test: () => this.testEngagementAIProviderWiring() },
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
-      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() }
+      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
+      { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() }
     ];
 
     let passed = 0;
@@ -3463,6 +3464,39 @@ class SystemTest {
     }
     const noService = new DailyAutomation({}, {}, {});
     await noService.refreshGrowthExperiments();
+  }
+
+  async testChannelProfile() {
+    const { getChannelProfile, applyTextPolicy, applyVisualPolicy } = require('./utils/channel-profile');
+    const { normalizeYouTubeMetadata } = require('./utils/youtube-metadata-validator');
+    const defaults = getChannelProfile({});
+    if (defaults.language !== 'en' || defaults.madeForKids !== false) {
+      throw new Error('Default channel profile must stay English and not made for kids');
+    }
+    if (applyTextPolicy('Hello', defaults) !== 'Hello' || applyVisualPolicy('A cat', defaults) !== 'A cat') {
+      throw new Error('Default profile must not change prompts');
+    }
+    const kids = getChannelProfile({ CONTENT_LANGUAGE: 'pt-BR', MADE_FOR_KIDS: 'true' });
+    if (kids.language !== 'pt-BR' || !kids.madeForKids || kids.captionsName !== 'Português') {
+      throw new Error('Kids pt-BR profile was not read from the environment');
+    }
+    const textPrompt = applyTextPolicy('Write a script.', kids);
+    if (!textPrompt.includes('Brazilian Portuguese') || !/copyrighted/i.test(textPrompt) || !textPrompt.endsWith('Write a script.')) {
+      throw new Error('Text policy must add language and child-safety rules before the original prompt');
+    }
+    if (!/Child-friendly/.test(applyVisualPolicy('A cat', kids))) {
+      throw new Error('Visual policy must add child-safe image rules');
+    }
+    const previous = process.env.CONTENT_LANGUAGE;
+    process.env.CONTENT_LANGUAGE = 'pt-BR';
+    try {
+      const metadata = normalizeYouTubeMetadata({ title: 'Teste', description: 'Descrição', tags: ['a', 'b', 'c'] });
+      if (metadata.defaultLanguage !== 'pt-BR' || metadata.defaultAudioLanguage !== 'pt-BR') {
+        throw new Error('YouTube metadata must default to the configured content language');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = previous;
+    }
   }
 }
 

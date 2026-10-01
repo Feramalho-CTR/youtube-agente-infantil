@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
+const { applyVisualPolicy } = require('./channel-profile');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -216,7 +217,8 @@ class AIVideoGenerator {
     }
   }
 
-  async generateImage(prompt, imagePath) {
+  async generateImage(rawPrompt, imagePath) {
+    const prompt = applyVisualPolicy(rawPrompt);
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
 
     if (this.openai) {
