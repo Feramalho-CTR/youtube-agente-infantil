@@ -23,6 +23,7 @@ config/*.pem
 data/*.db
 data/*.sqlite
 data/*.db-journal
+data/voice-rotation.json
 *.db-shm
 *.db-wal
 

@@ -277,7 +277,7 @@ class SceneRepairService {
       await this.db.updateProductionScene(productionId, sceneId, {
         narrationStatus: 'generating', narrationError: null
       });
-      const generatedPath = await this.videoGenerator.generateTTSAudio(scene.scriptText, outputPath);
+      const generatedPath = await this.videoGenerator.generateTTSAudio(scene.scriptText, outputPath, bundle.assets?.audio?.voice || null);
       const evidence = this.videoGenerator.lastNarrationResult || {};
       if (!await this.videoGenerator.isUsableAudioFile(generatedPath)) {
         throw this.error('Narration regeneration returned no usable audio; configure a live TTS provider and retry', 422, 'NARRATION_UNAVAILABLE');
@@ -442,7 +442,7 @@ class SceneRepairService {
       if (scene.narrationStatus === 'stale' || input.regenerateNarration === true) {
         const audioPath = path.join(this.dataRoot, 'audio', 'scenes', productionId, `${String(scene.position).padStart(3, '0')}_r${scene.revision + 1}.mp3`);
         await fs.mkdir(path.dirname(audioPath), { recursive: true });
-        const generatedPath = await this.videoGenerator.generateTTSAudio(scene.scriptText, audioPath);
+        const generatedPath = await this.videoGenerator.generateTTSAudio(scene.scriptText, audioPath, bundle.assets?.audio?.voice || null);
         if (!await this.videoGenerator.isUsableAudioFile(generatedPath)) {
           throw this.error('Narration regeneration returned a simulation; configure a live TTS provider before rebuilding edited narration', 422, 'NARRATION_UNAVAILABLE');
         }

@@ -66,7 +66,8 @@ class SystemTest {
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
       { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
       { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() },
-      { name: 'Kids Profile Script And SEO Assembly', test: () => this.testKidsProfileAssembly() }
+      { name: 'Kids Profile Script And SEO Assembly', test: () => this.testKidsProfileAssembly() },
+      { name: 'Narrator Voice Rotation', test: () => this.testVoiceRotation() }
     ];
 
     let passed = 0;
@@ -3557,6 +3558,28 @@ class SystemTest {
     } finally {
       if (saved.language === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = saved.language;
       if (saved.kids === undefined) delete process.env.MADE_FOR_KIDS; else process.env.MADE_FOR_KIDS = saved.kids;
+    }
+  }
+
+  async testVoiceRotation() {
+    const os = require('os');
+    const fs = require('fs').promises;
+    const { VoiceRotation } = require('./utils/voice-rotation');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'voice-rotation-'));
+    try {
+      const statePath = path.join(dir, 'state.json');
+      const single = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm' } });
+      if (await single.next() !== null) throw new Error('Rotation must stay off until both voices are configured');
+
+      const rotation = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm', ELEVENLABS_VOICE_FEMALE: 'f' } });
+      const order = [];
+      for (let i = 0; i < 4; i++) order.push((await rotation.next()).elevenLabsVoiceId);
+      if (order.join(',') !== 'm,f,m,f') throw new Error(`Voices must alternate male/female, got ${order.join(',')}`);
+
+      const restarted = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm', ELEVENLABS_VOICE_FEMALE: 'f' } });
+      if ((await restarted.next()).gender !== 'male') throw new Error('Rotation must continue from the saved state after a restart');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
     }
   }
 }

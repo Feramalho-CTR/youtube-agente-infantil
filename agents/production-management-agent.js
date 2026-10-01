@@ -4,6 +4,7 @@ const { Logger } = require('../utils/logger');
 const { AIVideoGenerator } = require('../utils/ai-video-generator');
 const { SceneRepairService } = require('../utils/scene-repair-service');
 const { getChannelProfile } = require('../utils/channel-profile');
+const { VoiceRotation } = require('../utils/voice-rotation');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -14,6 +15,7 @@ class ProductionManagementAgent {
     this.assets = new Map();
     this.aiVideoGenerator = new AIVideoGenerator(credentials, { db });
     this.sceneRepair = new SceneRepairService(db, this.aiVideoGenerator, { logger: this.logger });
+    this.voiceRotation = new VoiceRotation();
   }
 
   async initialize() {
@@ -427,8 +429,12 @@ class ProductionManagementAgent {
       // Read the TTS script
       const ttsText = await fs.readFile(productionData.assets.script.ttsPath, 'utf8');
       
+      // One voice per production, alternating male/female between productions when configured.
+      // A resumed production keeps the voice it already started with.
+      const voice = productionData.assets.audio?.voice || await this.voiceRotation.next();
+
       // Generate audio using AI TTS and retain the provider evidence returned by the generator.
-      const generatedPath = await this.aiVideoGenerator.generateTTSAudio(ttsText, audioPath);
+      const generatedPath = await this.aiVideoGenerator.generateTTSAudio(ttsText, audioPath, voice);
       const evidence = this.aiVideoGenerator.lastNarrationResult || {};
       const usable = await this.aiVideoGenerator.isUsableAudioFile(generatedPath);
 
@@ -446,7 +452,8 @@ class ProductionManagementAgent {
         generatedAt: evidence.generatedAt || new Date().toISOString(),
         cost: evidence.cost || {},
         error: usable ? null : 'No live narration provider returned usable audio',
-        intentionalSilence: false
+        intentionalSilence: false,
+        voice: voice || null
       };
 
       if (usable) productionData.timeline.audioGenerated = new Date().toISOString();
