@@ -9,6 +9,8 @@ const WIDTH = 1920;
 const HEIGHT = 1080;
 const FPS = 30;
 const SCENE_PADDING_SECONDS = 0.35;
+// The scene editor rejects scenes shorter than this, so short lines are held on screen longer.
+const MIN_SCENE_SECONDS = 2;
 const MAX_SCENE_WORDS = 40;
 
 function isStoryboardEnabled(env = process.env) {
@@ -42,7 +44,7 @@ function sectionLines(section = {}) {
   if (Array.isArray(section.content)) return section.content.map(cleanLine).filter(Boolean);
   if (typeof section.content === 'string') return [cleanLine(section.content)].filter(Boolean);
   const items = section.items || section.steps || [];
-  return items.map(item => cleanLine(`${item.title || ''}. ${item.description || ''}`)).filter(Boolean);
+  return items.map(item => cleanLine([item.title, item.description, item.tip].filter(Boolean).join('. '))).filter(Boolean);
 }
 
 function buildStoryboardScenes(script = {}) {
@@ -162,6 +164,7 @@ ${scenes.map((scene, index) => `${index + 1}. ${scene.scriptText}`).join('\n')}`
     const provider = media.registry.select(settings.provider, settings.order, routingRequest);
     if (provider.id === 'slideshow') return null;
     const normalized = provider.normalizeRequest(routingRequest);
+    if (normalized.duration > remainingSeconds) return null;
     const clipScene = { index: scene.position, label: scene.label, prompt: scene.prompt, duration: normalized.duration };
     const outputPath = path.join(outputDir, `${productionId}_${provider.id}_scene${String(scene.position).padStart(3, '0')}.mp4`);
     const result = await media.generateClip({
@@ -198,7 +201,7 @@ ${scenes.map((scene, index) => `${index + 1}. ${scene.scriptText}`).join('\n')}`
       narrationEvidence = narrationEvidence || this.videoGenerator.lastNarrationResult || {};
       scene.audioPath = generatedAudio;
       scene.narrationDuration = await this.getDuration(generatedAudio);
-      scene.duration = Number((scene.narrationDuration + SCENE_PADDING_SECONDS).toFixed(3));
+      scene.duration = Number(Math.max(MIN_SCENE_SECONDS, scene.narrationDuration + SCENE_PADDING_SECONDS).toFixed(3));
 
       const imagePath = await this.generateSceneImage(scene.prompt, path.join(sceneDir, `${id}_image.png`), style);
       // A failed image reuses the previous scene's picture rather than dropping the beat.
@@ -209,7 +212,9 @@ ${scenes.map((scene, index) => `${index + 1}. ${scene.scriptText}`).join('\n')}`
     }
 
     const maxClips = Math.max(0, Number(this.env.STORYBOARD_AI_CLIPS ?? 2));
-    const budgetSeconds = Math.max(0, Number(this.env.VIDEO_MAX_GENERATED_SECONDS ?? 60));
+    // The media service resolves the paid-seconds cap from the environment or the dashboard setting.
+    const mediaSettings = maxClips > 0 && this.mediaGeneration ? await this.mediaGeneration.settings() : null;
+    const budgetSeconds = Math.max(0, Number(mediaSettings?.maxGeneratedSeconds ?? 0));
     let generatedSeconds = 0;
     for (const index of pickClipScenes(scenes.length, maxClips)) {
       const scene = scenes[index];

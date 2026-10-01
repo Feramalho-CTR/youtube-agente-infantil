@@ -3606,6 +3606,30 @@ class SystemTest {
     if (pickClipScenes(10, 2).join(',') !== '0,6' || pickClipScenes(10, 0).length !== 0) {
       throw new Error('AI clips must go to the opening and the climax only, within the configured limit');
     }
+    const tutorial = buildStoryboardScenes({ mainContent: { sections: [{ title: 'Passos', steps: [{ title: 'Lave as mãos', description: 'Use sabão.', tip: 'Cante uma música enquanto lava' }] }] } });
+    if (!tutorial.some(scene => scene.scriptText.includes('Cante uma música'))) {
+      throw new Error('Step tips must be narrated in the storyboard');
+    }
+    const clipRequests = [];
+    const capped = new StoryboardVideoService({
+      videoGenerator: {},
+      env: { STORYBOARD_AI_CLIPS: '2' }
+    });
+    capped.mediaGeneration = {
+        async settings() { return { provider: 'fake', order: [], mode: 'hybrid', clipDuration: 8, maxGeneratedSeconds: 8 }; },
+        registry: { select: () => ({ id: 'fake', model: 'fake', normalizeRequest: request => ({ duration: request.duration }) }) },
+      async generateClip({ outputPath }) { clipRequests.push(outputPath); return { outputPath, task: {} }; }
+    };
+    capped.getDuration = async () => 1;
+    capped.describeVisuals = async scenes => scenes.map(() => 'cube');
+    capped.generateSceneImage = async (_prompt, imagePath) => imagePath;
+    capped.videoGenerator = { async generateTTSAudio(_text, out) { return out; }, async isUsableAudioFile() { return true; } };
+    capped.concatNarration = async () => null;
+    const capDir = await fs.mkdtemp(path.join(os.tmpdir(), 'storyboard-cap-'));
+    await capped.produce({ productionId: 'cap', script, style: 'animated', outputDir: capDir }).finally(() => fs.rm(capDir, { recursive: true, force: true }));
+    if (clipRequests.length !== 1) {
+      throw new Error(`The dashboard paid-seconds cap must limit AI clips, got ${clipRequests.length} clips for an 8s cap`);
+    }
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'storyboard-'));
     try {
@@ -3629,6 +3653,7 @@ class SystemTest {
       const result = await service.produce({ productionId: 'test', script, style: 'animated', outputDir: dir });
       result.scenes.forEach((scene, index) => {
         if (Math.abs(scene.narrationDuration - durations[index]) > 0.1) throw new Error('Scene duration must come from its own narration audio');
+        if (scene.duration < 2) throw new Error('Short scenes must last at least the editor minimum of 2 seconds');
       });
       const finalPath = path.join(dir, 'final.mp4');
       await service.render(result.scenes, result.narrationPath, finalPath);
