@@ -30,7 +30,11 @@ function getChannelProfile(env = process.env) {
     language,
     languageName: LANGUAGE_NAMES[language] || language,
     captionsName: env.CAPTIONS_NAME || (language.startsWith('pt') ? 'Português' : `${LANGUAGE_NAMES[language] || language} captions`),
-    madeForKids: readBoolean(env.MADE_FOR_KIDS, false)
+    madeForKids: readBoolean(env.MADE_FOR_KIDS, false),
+    theme: String(env.CHANNEL_THEME || '').trim(),
+    values: String(env.CHANNEL_VALUES || '').trim(),
+    narrationStyle: String(env.NARRATION_STYLE || '').trim(),
+    visualStyle: String(env.VISUAL_STYLE || '').trim()
   };
 }
 
@@ -45,6 +49,9 @@ function textPolicyPreamble(profile = getChannelProfile()) {
     lines.push(`Write every piece of audience-facing text (spoken narration, titles, descriptions, tags, hashtags, on-screen text, captions) in ${profile.languageName}. Keep JSON keys and any requested structure exactly as specified in English.`);
   }
   if (profile.madeForKids) lines.push(...KIDS_TEXT_RULES);
+  if (profile.theme) lines.push(`Every video belongs to this channel format: ${profile.theme}`);
+  if (profile.values) lines.push(`Every story must teach these values in a natural, gentle way: ${profile.values}`);
+  if (profile.narrationStyle) lines.push(`Narration voice and tone: ${profile.narrationStyle}`);
   if (!lines.length) return '';
   return `Channel content policy (always follow):\n- ${lines.join('\n- ')}\n\n`;
 }
@@ -56,8 +63,12 @@ function applyTextPolicy(prompt, profile = getChannelProfile()) {
 }
 
 function applyVisualPolicy(prompt, profile = getChannelProfile()) {
-  if (!profile.madeForKids || typeof prompt !== 'string') return prompt;
-  return `${prompt.trim()} ${KIDS_VISUAL_RULES}`;
+  if (typeof prompt !== 'string') return prompt;
+  const additions = [];
+  if (profile.visualStyle && !prompt.includes(profile.visualStyle)) additions.push(`Visual style: ${profile.visualStyle}.`);
+  if (profile.madeForKids) additions.push(KIDS_VISUAL_RULES);
+  if (!additions.length) return prompt;
+  return `${prompt.trim()} ${additions.join(' ')}`;
 }
 
 module.exports = { getChannelProfile, applyTextPolicy, applyVisualPolicy, textPolicyPreamble, requiresGeneratedText, readBoolean };

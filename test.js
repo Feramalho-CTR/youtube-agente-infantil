@@ -3488,6 +3488,14 @@ class SystemTest {
     if (!/Child-friendly/.test(applyVisualPolicy('A cat', kids))) {
       throw new Error('Visual policy must add child-safe image rules');
     }
+    const themed = getChannelProfile({ CHANNEL_THEME: 'blocky stories', CHANNEL_VALUES: 'respect parents', NARRATION_STYLE: 'cheerful', VISUAL_STYLE: 'voxel art' });
+    const themedPrompt = applyTextPolicy('Write.', themed);
+    if (!themedPrompt.includes('blocky stories') || !themedPrompt.includes('respect parents') || !themedPrompt.includes('cheerful')) {
+      throw new Error('Channel theme, values and narration style must reach text prompts');
+    }
+    if (!applyVisualPolicy('A house', themed).includes('Visual style: voxel art.')) {
+      throw new Error('Channel visual style must reach image prompts');
+    }
     const previous = process.env.CONTENT_LANGUAGE;
     process.env.CONTENT_LANGUAGE = 'pt-BR';
     try {

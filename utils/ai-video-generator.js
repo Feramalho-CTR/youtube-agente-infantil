@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
-const { applyVisualPolicy } = require('./channel-profile');
+const { applyVisualPolicy, getChannelProfile } = require('./channel-profile');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -303,8 +303,10 @@ class AIVideoGenerator {
       abstract: "abstract art, geometric shapes, gradient colors, artistic composition"
     };
 
+    // A channel-wide VISUAL_STYLE replaces per-call presets so every image keeps one consistent look.
+    const channelStyle = getChannelProfile().visualStyle;
     const normalizedStyle = String(style || '').trim().toLowerCase();
-    const enhancement = styleEnhancements[normalizedStyle] || String(style || '').trim() || styleEnhancements.ethereal;
+    const enhancement = channelStyle || styleEnhancements[normalizedStyle] || String(style || '').trim() || styleEnhancements.ethereal;
     return `${prompt}, ${enhancement}, high quality, 16:9 aspect ratio, digital art`;
   }
 
