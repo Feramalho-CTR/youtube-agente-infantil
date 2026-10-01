@@ -65,7 +65,8 @@ class SystemTest {
       { name: 'Engagement AI Provider Wiring', test: () => this.testEngagementAIProviderWiring() },
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
       { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
-      { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() }
+      { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() },
+      { name: 'Kids Profile Script And SEO Assembly', test: () => this.testKidsProfileAssembly() }
     ];
 
     let passed = 0;
@@ -3496,6 +3497,58 @@ class SystemTest {
       }
     } finally {
       if (previous === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = previous;
+    }
+  }
+
+  async testKidsProfileAssembly() {
+    const { ScriptWriterAgent } = require('./agents/script-writer-agent');
+    const { SEOOptimizerAgent } = require('./agents/seo-optimizer-agent');
+    const saved = { language: process.env.CONTENT_LANGUAGE, kids: process.env.MADE_FOR_KIDS };
+    process.env.CONTENT_LANGUAGE = 'pt-BR';
+    process.env.MADE_FOR_KIDS = 'true';
+    const db = { saveScript: async () => {}, saveSEOData: async () => {}, getKeywordHistory: async () => [] };
+    const strategy = { topic: 'cores', contentType: 'Explainer', angle: 'aprender cores', targetAudience: 'crianças', keywords: ['cores'] };
+    try {
+      const writer = new ScriptWriterAgent(db, {});
+      writer.aiTextService = {
+        providerName: 'test',
+        isAvailable: () => true,
+        generateText: async () => JSON.stringify({
+          title: 'Aprendendo as cores',
+          hook: 'Vamos descobrir as cores?',
+          introduction: 'Oi, amiguinhos! Hoje vamos brincar com as cores.',
+          sections: [{ title: 'Vermelho', content: ['O morango é vermelho.'], duration: 30 }],
+          conclusion: 'Agora você já conhece as cores!',
+          cta: { subscribe: 'Até a próxima aventura!', comment: 'Comente sua cor favorita', like: 'Deixe seu like' },
+          claims: []
+        })
+      };
+      const script = await writer.generateScript(strategy);
+      const spoken = script.fullScript;
+      if (/welcome back|Wrapping Up|in the comments|Subscribe for more/i.test(spoken)) {
+        throw new Error('English template text leaked into a pt-BR kids script');
+      }
+      if (script.callToAction.comment || script.callToAction.like) {
+        throw new Error('Kids scripts must not ask viewers to comment or like');
+      }
+      if (script.introduction.topicIntro !== 'Oi, amiguinhos! Hoje vamos brincar com as cores.' ||
+          script.conclusion.finalThought !== 'Agora você já conhece as cores!') {
+        throw new Error('Model-written introduction and conclusion were not used');
+      }
+
+      writer.aiTextService = { providerName: 'test', isAvailable: () => false };
+      let scriptRejected = false;
+      try { await writer.generateScript(strategy); } catch (error) { scriptRejected = /AI script generation is required/.test(error.message); }
+      if (!scriptRejected) throw new Error('English template script fallback must be refused for a pt-BR kids profile');
+
+      const seo = new SEOOptimizerAgent(db, {});
+      seo.aiTextService = { providerName: 'test', isAvailable: () => false };
+      let seoRejected = false;
+      try { await seo.optimize(script, strategy); } catch (error) { seoRejected = /AI SEO generation is required/.test(error.message); }
+      if (!seoRejected) throw new Error('English template SEO fallback must be refused for a pt-BR kids profile');
+    } finally {
+      if (saved.language === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = saved.language;
+      if (saved.kids === undefined) delete process.env.MADE_FOR_KIDS; else process.env.MADE_FOR_KIDS = saved.kids;
     }
   }
 }

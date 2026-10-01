@@ -34,6 +34,11 @@ function getChannelProfile(env = process.env) {
   };
 }
 
+// English template text and generic calls to action cannot satisfy a localized or kids profile.
+function requiresGeneratedText(profile = getChannelProfile()) {
+  return profile.language !== 'en' || profile.madeForKids;
+}
+
 function textPolicyPreamble(profile = getChannelProfile()) {
   const lines = [];
   if (profile.language !== 'en') {
@@ -55,4 +60,4 @@ function applyVisualPolicy(prompt, profile = getChannelProfile()) {
   return `${prompt.trim()} ${KIDS_VISUAL_RULES}`;
 }
 
-module.exports = { getChannelProfile, applyTextPolicy, applyVisualPolicy, textPolicyPreamble, readBoolean };
+module.exports = { getChannelProfile, applyTextPolicy, applyVisualPolicy, textPolicyPreamble, requiresGeneratedText, readBoolean };

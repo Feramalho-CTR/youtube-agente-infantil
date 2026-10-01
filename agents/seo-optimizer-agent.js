@@ -1,6 +1,6 @@
 const { Logger } = require('../utils/logger');
 const { AITextService } = require('../utils/ai-text-service');
-const { getChannelProfile } = require('../utils/channel-profile');
+const { getChannelProfile, requiresGeneratedText } = require('../utils/channel-profile');
 
 class SEOOptimizerAgent {
   constructor(db, credentials) {
@@ -38,6 +38,9 @@ class SEOOptimizerAgent {
       if (aiSEO) {
         ({ title, description, tags } = aiSEO);
       } else {
+        if (requiresGeneratedText()) {
+          throw new Error('AI SEO generation is required when CONTENT_LANGUAGE is not English or MADE_FOR_KIDS is enabled; the English template fallback would break the channel profile.');
+        }
         this.logger.info('Using template SEO optimization');
         // Generate optimized title
         title = await this.optimizeTitle(script.title, strategy);

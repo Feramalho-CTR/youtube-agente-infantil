@@ -15,7 +15,7 @@ Este fork roda um canal infantil em português. Duas variáveis do `.env` contro
 - `CONTENT_LANGUAGE=pt-BR`: narração, título, descrição, tags e legendas em português; metadados e legendas sobem para o YouTube como `pt-BR`.
 - `MADE_FOR_KIDS=true`: todo upload é marcado como "conteúdo para crianças" (`selfDeclaredMadeForKids`), exigência do YouTube/COPPA, e todos os prompts de roteiro, imagem e vídeo recebem regras de segurança infantil (sem violência, sustos, marcas ou personagens com direitos autorais).
 
-Sem essas variáveis, o comportamento original (inglês, não infantil) é mantido. As regras ficam em `utils/channel-profile.js`.
+Com qualquer uma delas ativa, roteiro e SEO precisam vir da IA: os modelos prontos em inglês são recusados, e vídeos infantis não pedem like, comentário nem clique em links. Sem essas variáveis, o comportamento original (inglês, não infantil) é mantido. As regras ficam em `utils/channel-profile.js`.
 
 ## What's new on master
 
