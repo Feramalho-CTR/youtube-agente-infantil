@@ -8,6 +8,7 @@ const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
 const { applyVisualPolicy, getChannelProfile } = require('./channel-profile');
+const { motionFilter, isStoryboardEnabled } = require('./storyboard-video');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -414,13 +415,17 @@ class AIVideoGenerator {
   }
 
   async renderMediaTimeline(segments, outputPath) {
+    // Storyboard channels keep the slow zoom/pan on stills when a repaired video is rebuilt.
+    const animateStills = isStoryboardEnabled();
     const args = ['-y'];
     for (const segment of segments) {
-      if (segment.type === 'image') args.push('-loop', '1', '-t', Number(segment.duration).toFixed(2), '-framerate', '30', '-i', segment.path);
+      if (segment.type === 'image' && animateStills) args.push('-i', segment.path);
+      else if (segment.type === 'image') args.push('-loop', '1', '-t', Number(segment.duration).toFixed(2), '-framerate', '30', '-i', segment.path);
       else args.push('-stream_loop', '-1', '-i', segment.path);
     }
-    const filters = segments.map((segment, index) =>
-      `[${index}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p,trim=duration=${Number(segment.duration).toFixed(2)},setpts=PTS-STARTPTS[v${index}]`
+    const filters = segments.map((segment, index) => (segment.type === 'image' && animateStills)
+      ? motionFilter(index, Number(segment.duration), index, `[v${index}]`)
+      : `[${index}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p,trim=duration=${Number(segment.duration).toFixed(2)},setpts=PTS-STARTPTS[v${index}]`
     );
     filters.push(`${segments.map((_, index) => `[v${index}]`).join('')}concat=n=${segments.length}:v=1:a=0[vout]`);
     args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputPath);

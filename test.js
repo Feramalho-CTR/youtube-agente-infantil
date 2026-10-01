@@ -67,7 +67,8 @@ class SystemTest {
       { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
       { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() },
       { name: 'Kids Profile Script And SEO Assembly', test: () => this.testKidsProfileAssembly() },
-      { name: 'Narrator Voice Rotation', test: () => this.testVoiceRotation() }
+      { name: 'Narrator Voice Rotation', test: () => this.testVoiceRotation() },
+      { name: 'Storyboard Scene-Synced Video', test: () => this.testStoryboardVideo() }
     ];
 
     let passed = 0;
@@ -3578,6 +3579,75 @@ class SystemTest {
 
       const restarted = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm', ELEVENLABS_VOICE_FEMALE: 'f' } });
       if ((await restarted.next()).gender !== 'male') throw new Error('Rotation must continue from the saved state after a restart');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  async testStoryboardVideo() {
+    const fs = require('fs').promises;
+    const os = require('os');
+    const sharp = require('sharp');
+    const { runFFmpeg, getMediaDuration } = require('./utils/ffmpeg');
+    const { StoryboardVideoService, buildStoryboardScenes, buildSrt, pickClipScenes } = require('./utils/storyboard-video');
+
+    const script = {
+      title: 'O cubinho corajoso',
+      hook: { text: 'Era uma vez um cubinho muito corajoso.' },
+      introduction: { topicIntro: 'Hoje ele vai ajudar a mamãe.' },
+      mainContent: { sections: [{ title: 'A ajuda', content: ['Ele arrumou o quarto.', 'Depois agradeceu a Deus pelo dia.'] }] },
+      conclusion: { finalThought: 'Ajudar a família deixa todo mundo feliz!' },
+      callToAction: { subscribe: 'Até a próxima!', like: '', comment: '', nextVideo: '' }
+    };
+    const planned = buildStoryboardScenes(script);
+    if (planned.length !== 6 || planned[2].scriptText !== 'Ele arrumou o quarto.') {
+      throw new Error(`Each narration line must become its own scene, got ${planned.length}`);
+    }
+    if (pickClipScenes(10, 2).join(',') !== '0,6' || pickClipScenes(10, 0).length !== 0) {
+      throw new Error('AI clips must go to the opening and the climax only, within the configured limit');
+    }
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'storyboard-'));
+    try {
+      const durations = [0.6, 0.9, 0.7, 0.8, 0.6, 0.5];
+      let call = 0;
+      const videoGenerator = {
+        lastNarrationResult: { provider: 'test', model: 'tone' },
+        enhanceVisualPrompt: prompt => prompt,
+        async generateTTSAudio(text, outputPath) {
+          const seconds = durations[call++];
+          await runFFmpeg(['-y', '-f', 'lavfi', '-i', `sine=frequency=440:duration=${seconds}`, '-c:a', 'libmp3lame', outputPath]);
+          return outputPath;
+        },
+        async isUsableAudioFile(file) { return Boolean(file); },
+        async generateImage(prompt, imagePath) {
+          await sharp({ create: { width: 640, height: 360, channels: 3, background: { r: 40 * call, g: 160, b: 90 } } }).png().toFile(imagePath);
+          return imagePath;
+        }
+      };
+      const service = new StoryboardVideoService({ videoGenerator, env: { STORYBOARD_AI_CLIPS: '0' } });
+      const result = await service.produce({ productionId: 'test', script, style: 'animated', outputDir: dir });
+      result.scenes.forEach((scene, index) => {
+        if (Math.abs(scene.narrationDuration - durations[index]) > 0.1) throw new Error('Scene duration must come from its own narration audio');
+      });
+      const finalPath = path.join(dir, 'final.mp4');
+      await service.render(result.scenes, result.narrationPath, finalPath);
+      const videoSeconds = await getMediaDuration(finalPath);
+      if (Math.abs(videoSeconds - result.totalDuration) > 0.3) {
+        throw new Error(`Video length ${videoSeconds}s must match the summed scene durations ${result.totalDuration}s`);
+      }
+      const { buildInitialSceneManifest } = require('./utils/scene-repair-service');
+      const manifest = buildInitialSceneManifest({
+        script, assets: { audio: { provider: 'test' }, storyboard: { scenes: result.scenes } }
+      }, {});
+      if (manifest.length !== result.scenes.length || manifest.some((scene, index) =>
+        scene.duration !== result.scenes[index].duration || scene.audioPath !== result.scenes[index].audioPath || scene.narrationStatus !== 'current')) {
+        throw new Error('The scene manifest must keep the storyboard timings and per-scene narration');
+      }
+      const srt = buildSrt(result.scenes);
+      if (!srt.includes('Ele arrumou o quarto.') || srt.split('-->').length - 1 !== 6) {
+        throw new Error('Captions must have one cue per scene with the scene narration');
+      }
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

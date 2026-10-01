@@ -73,7 +73,46 @@ function durationSeconds(value, fallback = 60) {
   return fallback;
 }
 
+// Storyboard productions already have exact per-scene narration, visuals and timings.
+function storyboardManifest(production, providerResult) {
+  const audio = production.assets?.audio || {};
+  return production.assets.storyboard.scenes.map(scene => {
+    const clip = scene.clip;
+    return {
+      id: `scene_${crypto.randomUUID()}`,
+      position: scene.position,
+      label: scene.label,
+      scriptText: scene.scriptText,
+      prompt: scene.prompt,
+      duration: Number(scene.duration),
+      assetType: clip ? 'video' : 'image',
+      assetOrigin: 'generated',
+      assetPath: clip ? clip.path : scene.assetPath,
+      audioPath: scene.audioPath,
+      narrationProvider: audio.provider || null,
+      narrationModel: audio.model || null,
+      narrationTaskId: null,
+      narrationError: null,
+      narrationGeneratedAt: audio.generatedAt || null,
+      narrationCost: audio.cost || {},
+      provider: clip ? clip.provider : 'image-provider',
+      model: clip ? clip.model : providerResult.model || null,
+      externalTaskId: clip ? clip.taskId : null,
+      status: 'ready',
+      narrationStatus: 'current',
+      revision: 1,
+      locked: false,
+      rightsConfirmed: true,
+      provenanceSourceIds: [],
+      containsSyntheticMedia: Boolean(clip),
+      estimatedCost: clip ? { unit: 'generated_seconds', amount: clip.duration || 0, pricing: 'provider-priced' } : {},
+      actualCost: {}
+    };
+  });
+}
+
 function buildInitialSceneManifest(production = {}, providerResult = {}) {
+  if (production.assets?.storyboard?.scenes?.length) return storyboardManifest(production, providerResult);
   const blueprints = scriptScenes(production.script || {});
   const totalDuration = durationSeconds(production.estimatedDuration || production.assets?.finalVideo?.duration, Math.max(30, blueprints.length * 8));
   const wordCounts = blueprints.map(scene => Math.max(8, scene.scriptText.trim().split(/\s+/).filter(Boolean).length));
@@ -148,6 +187,7 @@ class SceneRepairService {
   }
 
   async initializeAudioSegments(production, scenes) {
+    if (scenes.length && scenes.every(scene => scene.audioPath && scene.narrationStatus === 'current')) return scenes;
     const audioPath = production.assets?.audio?.path;
     const audio = production.assets?.audio || {};
     if (!await this.videoGenerator?.isUsableAudioFile?.(audioPath)) {
