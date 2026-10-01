@@ -5,6 +5,8 @@ const { AIVideoGenerator } = require('../utils/ai-video-generator');
 const { SceneRepairService } = require('../utils/scene-repair-service');
 const { getChannelProfile } = require('../utils/channel-profile');
 const { VoiceRotation } = require('../utils/voice-rotation');
+const { StoryboardVideoService, buildSrt, isStoryboardEnabled } = require('../utils/storyboard-video');
+const { AITextService } = require('../utils/ai-text-service');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -16,6 +18,11 @@ class ProductionManagementAgent {
     this.aiVideoGenerator = new AIVideoGenerator(credentials, { db });
     this.sceneRepair = new SceneRepairService(db, this.aiVideoGenerator, { logger: this.logger });
     this.voiceRotation = new VoiceRotation();
+    this.storyboard = new StoryboardVideoService({
+      videoGenerator: this.aiVideoGenerator,
+      aiTextService: new AITextService(credentials?.credentials || credentials || {}),
+      logger: this.logger
+    });
   }
 
   async initialize() {
@@ -94,17 +101,22 @@ class ProductionManagementAgent {
       // Save to database
       await this.db.saveProductionData(productionData);
       
-      // Generate video content
-      await this.generateVideoContent(productionData);
-      
-      // Generate audio narration
-      await this.generateAudioNarration(productionData);
-      
-      // Generate captions
-      await this.generateCaptions(productionData);
-      
-      // Final assembly
-      await this.assembleVideo(productionData);
+      if (isStoryboardEnabled()) {
+        // Scene-by-scene narration, visuals timed to each line, captions from real timings.
+        await this.produceStoryboard(productionData);
+      } else {
+        // Generate video content
+        await this.generateVideoContent(productionData);
+
+        // Generate audio narration
+        await this.generateAudioNarration(productionData);
+
+        // Generate captions
+        await this.generateCaptions(productionData);
+
+        // Final assembly
+        await this.assembleVideo(productionData);
+      }
 
       // Persist a scene-addressable production manifest for selective review and repair.
       await this.sceneRepair.initializeProduction(productionData, this.aiVideoGenerator.lastVideoResult || {});
@@ -294,6 +306,83 @@ class ProductionManagementAgent {
     else if (hoursUntilPublish < 48) priority += 10;
     
     return Math.min(100, priority);
+  }
+
+  async produceStoryboard(productionData) {
+    this.logger.info('Producing storyboard video (per-scene narration and visuals)...');
+    try {
+      const outputDir = path.join(__dirname, '..', 'data', 'videos');
+      await fs.mkdir(outputDir, { recursive: true });
+      const voice = productionData.assets.audio?.voice || await this.voiceRotation.next();
+      const profile = await this.db.getChannelProfile?.() || {};
+      const result = await this.storyboard.produce({
+        productionId: productionData.id,
+        jobId: productionData.jobId,
+        script: productionData.script,
+        voice,
+        style: profile.visual_style || 'animated',
+        outputDir
+      });
+      const { scenes, narrationPath, narrationEvidence, totalDuration } = result;
+      const durationLabel = `${Math.floor(totalDuration / 60)}:${String(Math.round(totalDuration % 60)).padStart(2, '0')}`;
+      productionData.estimatedDuration = durationLabel;
+
+      productionData.assets.video = {
+        visualAssets: scenes.map(scene => scene.assetPath),
+        duration: durationLabel, format: 'mp4', resolution: '1920x1080', fps: 30, generatedWith: 'AI'
+      };
+      productionData.assets.audio = {
+        path: narrationPath, duration: durationLabel, format: 'm4a', generatedWith: 'AI', quality: 'high',
+        status: 'ready', simulated: false,
+        provider: narrationEvidence.provider || null, model: narrationEvidence.model || null,
+        externalTaskId: null, generatedAt: new Date().toISOString(), cost: narrationEvidence.cost || {},
+        error: null, intentionalSilence: false, voice: voice || null
+      };
+      productionData.assets.storyboard = {
+        scenes: scenes.map(scene => ({
+          position: scene.position, label: scene.label, scriptText: scene.scriptText, prompt: scene.prompt,
+          duration: scene.duration, audioPath: scene.audioPath, assetPath: scene.assetPath, clip: scene.clip || null
+        }))
+      };
+      productionData.timeline.videoGenerated = new Date().toISOString();
+      productionData.timeline.audioGenerated = new Date().toISOString();
+
+      const captionsPath = path.join(__dirname, '..', 'data', 'captions', `${productionData.id}_captions.srt`);
+      await fs.mkdir(path.dirname(captionsPath), { recursive: true });
+      await fs.writeFile(captionsPath, buildSrt(scenes));
+      productionData.assets.captions = {
+        path: captionsPath, format: 'srt', language: getChannelProfile().language, autoGenerated: true, sceneAware: true
+      };
+      productionData.timeline.captionsGenerated = new Date().toISOString();
+
+      const finalVideoPath = path.join(outputDir, `${productionData.id}_final.mp4`);
+      await this.storyboard.render(scenes, narrationPath, finalVideoPath);
+      const clips = scenes.filter(scene => scene.clip);
+      const providerResult = {
+        requestedProvider: clips[0]?.clip.provider || 'storyboard',
+        actualProvider: clips[0]?.clip.provider || 'storyboard',
+        model: clips[0]?.clip.model || 'local-ffmpeg',
+        mode: 'storyboard',
+        generatedSeconds: clips.reduce((sum, scene) => sum + Math.min(scene.clip.duration, scene.duration), 0),
+        tasks: clips.map(scene => ({ scene: scene.position, taskId: scene.clip.taskId, provider: scene.clip.provider, model: scene.clip.model })),
+        scenes: clips.map(scene => ({
+          index: scene.position, label: scene.label, prompt: scene.prompt, duration: scene.clip.duration,
+          path: scene.clip.path, taskId: scene.clip.taskId, provider: scene.clip.provider, model: scene.clip.model
+        }))
+      };
+      this.aiVideoGenerator.lastVideoResult = providerResult;
+      const stats = await fs.stat(finalVideoPath);
+      productionData.assets.finalVideo = {
+        path: finalVideoPath, fileSize: stats.size, duration: durationLabel, generatedWith: 'AI',
+        resolution: '1920x1080', format: 'mp4', provider: providerResult
+      };
+      productionData.containsSyntheticMedia = clips.length > 0;
+      this.logger.info(`Storyboard video assembled: ${scenes.length} scenes, ${durationLabel}`);
+      return finalVideoPath;
+    } catch (error) {
+      this.logger.error('Storyboard production failed:', error);
+      return await this.simulateVideoAssembly(productionData, error.message);
+    }
   }
 
   async generateVideoContent(productionData) {
