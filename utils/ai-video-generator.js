@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
+const { applyVisualPolicy, getChannelProfile } = require('./channel-profile');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -59,7 +60,8 @@ class AIVideoGenerator {
       : null);
   }
 
-  async generateTTSAudio(text, outputPath) {
+  // `voice` (from VoiceRotation) overrides the default voice per provider for one production.
+  async generateTTSAudio(text, outputPath, voice = null) {
     this.logger.info('Generating TTS audio...');
     this.lastNarrationResult = null;
     let provider = 'simulation';
@@ -67,18 +69,19 @@ class AIVideoGenerator {
 
     try {
       let generatedPath;
-      if (this.elevenLabsApiKey && this.elevenLabsVoiceId) {
+      const elevenLabsVoiceId = voice?.elevenLabsVoiceId || this.elevenLabsVoiceId;
+      if (this.elevenLabsApiKey && elevenLabsVoiceId) {
         provider = 'elevenlabs';
         model = this.elevenLabsModel;
-        generatedPath = await this.generateElevenLabsTTS(text, outputPath);
+        generatedPath = await this.generateElevenLabsTTS(text, outputPath, elevenLabsVoiceId);
       } else if (this.openai) {
         provider = 'openai';
         model = 'gpt-4o-mini-tts';
-        generatedPath = await this.generateOpenAITTS(text, outputPath);
+        generatedPath = await this.generateOpenAITTS(text, outputPath, voice?.openaiVoice);
       } else if (this.gemini) {
         provider = 'gemini';
         model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
-        generatedPath = await this.generateGeminiTTS(text, outputPath);
+        generatedPath = await this.generateGeminiTTS(text, outputPath, voice?.geminiVoice);
       } else {
         generatedPath = await this.simulateTTSGeneration(text, outputPath);
       }
@@ -92,6 +95,7 @@ class AIVideoGenerator {
         externalTaskId: null,
         generatedAt: new Date().toISOString(),
         simulated: !usable,
+        voice: voice || null,
         cost: { provider, amount: null, currency: null, invoiceRequired: provider !== 'simulation' }
       };
       return generatedPath;
@@ -106,8 +110,8 @@ class AIVideoGenerator {
     }
   }
 
-  async generateElevenLabsTTS(text, outputPath) {
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${this.elevenLabsVoiceId}`;
+  async generateElevenLabsTTS(text, outputPath, voiceId = this.elevenLabsVoiceId) {
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
     
     const data = {
       text: text,
@@ -144,10 +148,10 @@ class AIVideoGenerator {
     });
   }
 
-  async generateOpenAITTS(text, outputPath) {
+  async generateOpenAITTS(text, outputPath, voiceName = null) {
     const response = await this.openai.audio.speech.create({
       model: "gpt-4o-mini-tts",
-      voice: "coral",
+      voice: voiceName || "coral",
       input: text,
       speed: 1.0
     });
@@ -159,9 +163,9 @@ class AIVideoGenerator {
     return outputPath;
   }
 
-  async generateGeminiTTS(text, outputPath) {
+  async generateGeminiTTS(text, outputPath, voiceOverride = null) {
     const model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
-    const voiceName = process.env.GEMINI_TTS_VOICE || 'Kore';
+    const voiceName = voiceOverride || process.env.GEMINI_TTS_VOICE || 'Kore';
 
     const response = await this.gemini.models.generateContent({
       model,
@@ -216,7 +220,8 @@ class AIVideoGenerator {
     }
   }
 
-  async generateImage(prompt, imagePath) {
+  async generateImage(rawPrompt, imagePath) {
+    const prompt = applyVisualPolicy(rawPrompt);
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
 
     if (this.openai) {
@@ -301,8 +306,10 @@ class AIVideoGenerator {
       abstract: "abstract art, geometric shapes, gradient colors, artistic composition"
     };
 
+    // A channel-wide VISUAL_STYLE replaces per-call presets so every image keeps one consistent look.
+    const channelStyle = getChannelProfile().visualStyle;
     const normalizedStyle = String(style || '').trim().toLowerCase();
-    const enhancement = styleEnhancements[normalizedStyle] || String(style || '').trim() || styleEnhancements.ethereal;
+    const enhancement = channelStyle || styleEnhancements[normalizedStyle] || String(style || '').trim() || styleEnhancements.ethereal;
     return `${prompt}, ${enhancement}, high quality, 16:9 aspect ratio, digital art`;
   }
 

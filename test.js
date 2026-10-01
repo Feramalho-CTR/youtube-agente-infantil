@@ -64,7 +64,10 @@ class SystemTest {
       { name: 'Reply Approval and Posting', test: () => this.testReplyApprovalAndPosting() },
       { name: 'Engagement AI Provider Wiring', test: () => this.testEngagementAIProviderWiring() },
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
-      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() }
+      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
+      { name: 'Channel Language And Kids Profile', test: () => this.testChannelProfile() },
+      { name: 'Kids Profile Script And SEO Assembly', test: () => this.testKidsProfileAssembly() },
+      { name: 'Narrator Voice Rotation', test: () => this.testVoiceRotation() }
     ];
 
     let passed = 0;
@@ -3463,6 +3466,121 @@ class SystemTest {
     }
     const noService = new DailyAutomation({}, {}, {});
     await noService.refreshGrowthExperiments();
+  }
+
+  async testChannelProfile() {
+    const { getChannelProfile, applyTextPolicy, applyVisualPolicy } = require('./utils/channel-profile');
+    const { normalizeYouTubeMetadata } = require('./utils/youtube-metadata-validator');
+    const defaults = getChannelProfile({});
+    if (defaults.language !== 'en' || defaults.madeForKids !== false) {
+      throw new Error('Default channel profile must stay English and not made for kids');
+    }
+    if (applyTextPolicy('Hello', defaults) !== 'Hello' || applyVisualPolicy('A cat', defaults) !== 'A cat') {
+      throw new Error('Default profile must not change prompts');
+    }
+    const kids = getChannelProfile({ CONTENT_LANGUAGE: 'pt-BR', MADE_FOR_KIDS: 'true' });
+    if (kids.language !== 'pt-BR' || !kids.madeForKids || kids.captionsName !== 'Português') {
+      throw new Error('Kids pt-BR profile was not read from the environment');
+    }
+    const textPrompt = applyTextPolicy('Write a script.', kids);
+    if (!textPrompt.includes('Brazilian Portuguese') || !/copyrighted/i.test(textPrompt) || !textPrompt.endsWith('Write a script.')) {
+      throw new Error('Text policy must add language and child-safety rules before the original prompt');
+    }
+    if (!/Child-friendly/.test(applyVisualPolicy('A cat', kids))) {
+      throw new Error('Visual policy must add child-safe image rules');
+    }
+    const themed = getChannelProfile({ CHANNEL_THEME: 'blocky stories', CHANNEL_VALUES: 'respect parents', NARRATION_STYLE: 'cheerful', VISUAL_STYLE: 'voxel art' });
+    const themedPrompt = applyTextPolicy('Write.', themed);
+    if (!themedPrompt.includes('blocky stories') || !themedPrompt.includes('respect parents') || !themedPrompt.includes('cheerful')) {
+      throw new Error('Channel theme, values and narration style must reach text prompts');
+    }
+    if (!applyVisualPolicy('A house', themed).includes('Visual style: voxel art.')) {
+      throw new Error('Channel visual style must reach image prompts');
+    }
+    const previous = process.env.CONTENT_LANGUAGE;
+    process.env.CONTENT_LANGUAGE = 'pt-BR';
+    try {
+      const metadata = normalizeYouTubeMetadata({ title: 'Teste', description: 'Descrição', tags: ['a', 'b', 'c'] });
+      if (metadata.defaultLanguage !== 'pt-BR' || metadata.defaultAudioLanguage !== 'pt-BR') {
+        throw new Error('YouTube metadata must default to the configured content language');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = previous;
+    }
+  }
+
+  async testKidsProfileAssembly() {
+    const { ScriptWriterAgent } = require('./agents/script-writer-agent');
+    const { SEOOptimizerAgent } = require('./agents/seo-optimizer-agent');
+    const saved = { language: process.env.CONTENT_LANGUAGE, kids: process.env.MADE_FOR_KIDS };
+    process.env.CONTENT_LANGUAGE = 'pt-BR';
+    process.env.MADE_FOR_KIDS = 'true';
+    const db = { saveScript: async () => {}, saveSEOData: async () => {}, getKeywordHistory: async () => [] };
+    const strategy = { topic: 'cores', contentType: 'Explainer', angle: 'aprender cores', targetAudience: 'crianças', keywords: ['cores'] };
+    try {
+      const writer = new ScriptWriterAgent(db, {});
+      writer.aiTextService = {
+        providerName: 'test',
+        isAvailable: () => true,
+        generateText: async () => JSON.stringify({
+          title: 'Aprendendo as cores',
+          hook: 'Vamos descobrir as cores?',
+          introduction: 'Oi, amiguinhos! Hoje vamos brincar com as cores.',
+          sections: [{ title: 'Vermelho', content: ['O morango é vermelho.'], duration: 30 }],
+          conclusion: 'Agora você já conhece as cores!',
+          cta: { subscribe: 'Até a próxima aventura!', comment: 'Comente sua cor favorita', like: 'Deixe seu like' },
+          claims: []
+        })
+      };
+      const script = await writer.generateScript(strategy);
+      const spoken = script.fullScript;
+      if (/welcome back|Wrapping Up|in the comments|Subscribe for more/i.test(spoken)) {
+        throw new Error('English template text leaked into a pt-BR kids script');
+      }
+      if (script.callToAction.comment || script.callToAction.like) {
+        throw new Error('Kids scripts must not ask viewers to comment or like');
+      }
+      if (script.introduction.topicIntro !== 'Oi, amiguinhos! Hoje vamos brincar com as cores.' ||
+          script.conclusion.finalThought !== 'Agora você já conhece as cores!') {
+        throw new Error('Model-written introduction and conclusion were not used');
+      }
+
+      writer.aiTextService = { providerName: 'test', isAvailable: () => false };
+      let scriptRejected = false;
+      try { await writer.generateScript(strategy); } catch (error) { scriptRejected = /AI script generation is required/.test(error.message); }
+      if (!scriptRejected) throw new Error('English template script fallback must be refused for a pt-BR kids profile');
+
+      const seo = new SEOOptimizerAgent(db, {});
+      seo.aiTextService = { providerName: 'test', isAvailable: () => false };
+      let seoRejected = false;
+      try { await seo.optimize(script, strategy); } catch (error) { seoRejected = /AI SEO generation is required/.test(error.message); }
+      if (!seoRejected) throw new Error('English template SEO fallback must be refused for a pt-BR kids profile');
+    } finally {
+      if (saved.language === undefined) delete process.env.CONTENT_LANGUAGE; else process.env.CONTENT_LANGUAGE = saved.language;
+      if (saved.kids === undefined) delete process.env.MADE_FOR_KIDS; else process.env.MADE_FOR_KIDS = saved.kids;
+    }
+  }
+
+  async testVoiceRotation() {
+    const os = require('os');
+    const fs = require('fs').promises;
+    const { VoiceRotation } = require('./utils/voice-rotation');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'voice-rotation-'));
+    try {
+      const statePath = path.join(dir, 'state.json');
+      const single = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm' } });
+      if (await single.next() !== null) throw new Error('Rotation must stay off until both voices are configured');
+
+      const rotation = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm', ELEVENLABS_VOICE_FEMALE: 'f' } });
+      const order = [];
+      for (let i = 0; i < 4; i++) order.push((await rotation.next()).elevenLabsVoiceId);
+      if (order.join(',') !== 'm,f,m,f') throw new Error(`Voices must alternate male/female, got ${order.join(',')}`);
+
+      const restarted = new VoiceRotation({ statePath, env: { ELEVENLABS_VOICE_MALE: 'm', ELEVENLABS_VOICE_FEMALE: 'f' } });
+      if ((await restarted.next()).gender !== 'male') throw new Error('Rotation must continue from the saved state after a restart');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   }
 }
 

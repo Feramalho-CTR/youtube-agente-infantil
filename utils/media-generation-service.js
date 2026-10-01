@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const { VideoProviderRegistry, DEFAULT_PROVIDER_ORDER, safeModelError } = require('./video-providers');
+const { applyVisualPolicy } = require('./channel-profile');
 const { Logger } = require('./logger');
 const { runFFmpeg } = require('./ffmpeg');
 
@@ -93,7 +94,7 @@ class MediaGenerationService {
         provider,
         outputPath,
         request: {
-          prompt: scene.prompt,
+          prompt: applyVisualPolicy(scene.prompt),
           duration: scene.duration,
           firstFrame: scene.firstFrame,
           referenceImages: scene.referenceImages,

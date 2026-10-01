@@ -170,11 +170,12 @@ class ContentStrategyAgent {
     // Simple keyword extraction
     const stopWords = ['the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'are', 'was', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'could', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which', 'who', 'when', 'where', 'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'can', 'will', 'just', 'should', 'now'];
     
+    const portugueseStopWords = ['para', 'como', 'com', 'uma', 'umas', 'uns', 'dos', 'das', 'que', 'mais', 'muito', 'sobre', 'esse', 'essa', 'isso', 'este', 'esta', 'pelo', 'pela', 'seus', 'suas', 'quando', 'onde', 'porque', 'você', 'vocês', 'nós', 'eles', 'elas', 'tudo', 'todo', 'toda', 'todos', 'todas', 'aqui', 'agora', 'novo', 'nova', 'vídeo', 'video'];
     return text
       .toLowerCase()
-      .replace(/[^\w\s]/g, '')
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
       .split(/\s+/)
-      .filter(word => word.length > 3 && !stopWords.includes(word));
+      .filter(word => word.length > 3 && !stopWords.includes(word) && !portugueseStopWords.includes(word));
   }
 
   mergeTrendData(trends, competitors) {

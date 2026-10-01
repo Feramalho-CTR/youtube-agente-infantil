@@ -1,4 +1,5 @@
 const { Logger } = require('../utils/logger');
+const { getChannelProfile, requiresGeneratedText } = require('../utils/channel-profile');
 const { AITextService } = require('../utils/ai-text-service');
 
 class ScriptWriterAgent {
@@ -58,6 +59,9 @@ class ScriptWriterAgent {
         return aiScript;
       }
       
+      if (requiresGeneratedText()) {
+        throw new Error('AI script generation is required when CONTENT_LANGUAGE is not English or MADE_FOR_KIDS is enabled; the English template fallback would break the channel profile.');
+      }
       this.logger.info('Using template script generation');
       // Generate script components
       const hook = await this.generateHook(strategy);
@@ -111,9 +115,11 @@ Return only valid JSON with this exact shape:
 {
   "title": "compelling title under 100 characters",
   "hook": "opening hook in one sentence",
+  "introduction": "one to three spoken sentences that introduce the topic",
   "sections": [
     { "title": "section title", "content": ["spoken script bullet"], "duration": 60 }
   ],
+  "conclusion": "one to three spoken sentences that wrap up the video",
   "cta": "clear call to action",
   "claims": [
     { "text": "specific factual claim a reviewer must verify", "riskLevel": "standard|high", "sourceUrls": ["exact supplied source URL"] }
@@ -132,7 +138,7 @@ Channel goal: ${strategy.channelGoal || 'help the viewer understand and act'}
 Channel value proposition: ${strategy.channelValueProposition || 'give the viewer practical value'}
 Editorial rationale: ${strategy.planRationale || 'fit the selected topic and audience'}
 Channel constraints: ${strategy.channelConstraints || 'none beyond the factual-safety rules below'}
-Preferred call to action: ${strategy.callToAction || 'invite the viewer to subscribe'}
+Preferred call to action: ${strategy.callToAction || (getChannelProfile().madeForKids ? 'a warm goodbye that invites the child to watch again, with no requests to like, comment, subscribe, or click links' : 'invite the viewer to subscribe')}
 Keywords: ${(strategy.keywords || []).join(', ')}
 Research sources: ${JSON.stringify(strategy.researchSources || [])}
 Avoid fabricated statistics, unsupported claims, and fake urgency. List every externally verifiable factual claim in claims. Use only exact URLs from Research sources; use an empty sourceUrls array when the supplied sources do not support a claim.`;
@@ -149,16 +155,26 @@ Avoid fabricated statistics, unsupported claims, and fake urgency. List every ex
         throw new Error('AI script response missing required fields');
       }
 
+      const profile = getChannelProfile();
+      const localized = requiresGeneratedText(profile);
+      if (localized && (!this.spokenText(parsed.introduction) || !this.spokenText(parsed.conclusion))) {
+        throw new Error('AI script response missing introduction or conclusion required by the channel profile');
+      }
+
       this.logger.info(`Using AI script generation via ${this.aiTextService.providerName}`);
       return {
         title: String(parsed.title).slice(0, 100),
         hook: this.normalizeAIHook(parsed.hook),
-        introduction: await this.generateIntroduction(strategy),
+        introduction: localized
+          ? this.buildAIIntroduction(parsed.introduction)
+          : await this.generateIntroduction(strategy),
         mainContent: {
           sections,
           totalDuration: this.calculateSectionsDuration(sections)
         },
-        conclusion: await this.generateConclusion(strategy),
+        conclusion: localized
+          ? this.buildAIConclusion(parsed.conclusion)
+          : await this.generateConclusion(strategy),
         callToAction: this.normalizeAICTA(parsed.cta, strategy),
         duration: this.estimateDuration({ sections }),
         tone: template.tone,
@@ -243,7 +259,35 @@ Avoid fabricated statistics, unsupported claims, and fake urgency. List every ex
     })).filter(item => item.text);
   }
 
+  spokenText(value) {
+    return String((value && typeof value === 'object' ? value.text : value) || '').trim();
+  }
+
+  buildAIIntroduction(text) {
+    return { greeting: '', topicIntro: this.spokenText(text), valueProposition: '', credibility: '', duration: '0:05-0:20' };
+  }
+
+  buildAIConclusion(text) {
+    return { type: 'conclusion', title: 'Conclusion', recap: [], finalThought: this.spokenText(text), duration: '30 seconds' };
+  }
+
   normalizeAICTA(cta, strategy) {
+    const profile = getChannelProfile();
+    if (requiresGeneratedText(profile)) {
+      // Only model-written text (already under the language and kids policy) is spoken; no English
+      // defaults, and kids videos never ask viewers to like, comment, or follow links.
+      const source = cta && typeof cta === 'object' ? cta : { subscribe: cta };
+      const closing = this.spokenText(source.subscribe || source.text);
+      return {
+        type: 'call_to_action',
+        subscribe: closing,
+        like: profile.madeForKids ? '' : this.spokenText(source.like),
+        comment: profile.madeForKids ? '' : this.spokenText(source.comment),
+        nextVideo: this.spokenText(source.nextVideo),
+        duration: '15 seconds'
+      };
+    }
+
     if (cta && typeof cta === 'object') {
       return {
         type: 'call_to_action',

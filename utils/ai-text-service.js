@@ -1,3 +1,4 @@
+const { applyTextPolicy } = require('./channel-profile');
 const OpenAI = require('openai');
 const { Logger } = require('./logger');
 
@@ -100,7 +101,8 @@ class AITextService {
     }
   }
 
-  async generateText(prompt, options = {}) {
+  async generateText(rawPrompt, options = {}) {
+    const prompt = options.skipChannelPolicy ? rawPrompt : applyTextPolicy(rawPrompt);
     const model = options.model || this.model;
     const maxTokens = options.maxTokens || 2048;
     const temperature = options.temperature ?? 0.7;
