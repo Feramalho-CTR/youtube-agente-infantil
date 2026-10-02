@@ -9,6 +9,8 @@ const GEMINI_MODELS = [
 ];
 const GEMINI_DEFAULT_MODEL = GEMINI_MODELS[0];
 
+const OMNIROUTE_DEFAULT_BASE_URL = 'http://localhost:20128/v1';
+
 const PROVIDERS = {
   openai: {
     name: 'OpenAI',
@@ -45,7 +47,32 @@ const PROVIDERS = {
     models: ['glm-5.3', 'glm-5.2', 'glm-5.1'],
     envKey: 'GLM_API_KEY',
   },
+  // OmniRoute (github.com/diegosouzapw/OmniRoute) is a local gateway that spreads
+  // requests across many free-tier providers. With OMNIROUTE_API_KEY in .env it is
+  // the backup used when the main text provider hits a rate limit or quota; it is
+  // only the main provider when nothing else is configured.
+  omniroute: {
+    name: 'OmniRoute',
+    get baseURL() {
+      return process.env.OMNIROUTE_BASE_URL || OMNIROUTE_DEFAULT_BASE_URL;
+    },
+    defaultModel: 'auto',
+    models: ['auto'],
+    envKey: 'OMNIROUTE_API_KEY',
+    envModel: 'OMNIROUTE_MODEL',
+    fallbackOnly: true,
+  },
 };
+
+// Errors that mean "this provider is out of requests or credits right now",
+// as opposed to a bad prompt or a broken key.
+function isLimitError(error) {
+  if (!error) return false;
+  const status = error.status ?? error.code;
+  if (status === 429 || status === 402) return true;
+  return /rate.?limit|quota|resource.?exhausted|too many requests|insufficient.?(credit|balance|funds)/i
+    .test(error.message || '');
+}
 
 class AITextService {
   constructor(credentials = {}) {
@@ -54,22 +81,49 @@ class AITextService {
     this.gemini = null;
     this.model = null;
     this.providerName = null;
+    this.fallback = null;
 
     this._init(credentials);
   }
 
   _init(credentials) {
+    this._initPrimary(credentials);
+
+    const omniroute = PROVIDERS.omniroute;
+    const omnirouteKey = process.env[omniroute.envKey];
+    if (!omnirouteKey) return;
+
+    const savedModel = credentials.aiProvider?.provider === 'omniroute' ? credentials.aiProvider.model : undefined;
+    const model = process.env[omniroute.envModel] || savedModel;
+    if (!this.isAvailable()) {
+      // Nothing else configured: OmniRoute is the only text provider.
+      return this._initOpenAICompatible(omniroute, omnirouteKey, model);
+    }
+    if (this.providerName === omniroute.name) return;
+
+    this.fallback = {
+      client: new OpenAI({ apiKey: omnirouteKey, baseURL: omniroute.baseURL }),
+      gemini: null,
+      model: model || omniroute.defaultModel,
+      providerName: omniroute.name,
+    };
+    this.logger.info(`OmniRoute ready as backup when ${this.providerName} hits its limit (model: ${this.fallback.model})`);
+  }
+
+  _initPrimary(credentials) {
     const provider = credentials.aiProvider?.provider;
     const apiKey = credentials.aiProvider?.apiKey;
     const model = credentials.aiProvider?.model;
 
     if (provider && PROVIDERS[provider] && apiKey) {
-      return this._initOpenAICompatible(PROVIDERS[provider], apiKey, model);
+      const preset = PROVIDERS[provider];
+      const envModel = preset.envModel && process.env[preset.envModel];
+      return this._initOpenAICompatible(preset, apiKey, envModel || model);
     }
 
     for (const [, preset] of Object.entries(PROVIDERS)) {
       const key = process.env[preset.envKey];
-      if (key) {
+      if (key && !preset.fallbackOnly) {
         return this._initOpenAICompatible(preset, key);
       }
     }
@@ -79,7 +133,9 @@ class AITextService {
       return this._initGemini(geminiKey, credentials.gemini?.model);
     }
 
-    this.logger.warn('No AI text provider configured — text generation unavailable');
+    if (!process.env[PROVIDERS.omniroute.envKey]) {
+      this.logger.warn('No AI text provider configured — text generation unavailable');
+    }
   }
 
   _initOpenAICompatible(preset, apiKey, model) {
@@ -103,14 +159,28 @@ class AITextService {
 
   async generateText(rawPrompt, options = {}) {
     const prompt = options.skipChannelPolicy ? rawPrompt : applyTextPolicy(rawPrompt);
-    const model = options.model || this.model;
+    try {
+      return await this._generate(this, prompt, options);
+    } catch (error) {
+      if (!this.fallback || !isLimitError(error)) throw error;
+      this.logger.warn(
+        `${this.providerName} hit its limit (${error.message}); switching to ${this.fallback.providerName}`
+      );
+      return this._generate(this.fallback, prompt, { ...options, model: undefined });
+    }
+  }
+
+  // target is this service (main provider) or this.fallback; both carry
+  // client/gemini/model/providerName.
+  async _generate(target, prompt, options) {
+    const model = options.model || target.model;
     const maxTokens = options.maxTokens || 2048;
     const temperature = options.temperature ?? 0.7;
 
-    if (this.gemini) {
+    if (target.gemini) {
       const config = { maxOutputTokens: maxTokens };
       if (!/^gemini-3\.(?:[5-9]|\d{2,})-/.test(model)) config.temperature = temperature;
-      const response = await this.gemini.models.generateContent({
+      const response = await target.gemini.models.generateContent({
         model,
         contents: prompt,
         config,
@@ -118,13 +188,13 @@ class AITextService {
       const text = response && response.text;
       if (typeof text !== 'string' || !text.trim()) {
         throw new Error(
-          `${this.providerName} returned an empty response. Check the API key and model quota — free-tier Gemini keys are rate-limited and can return empty output.`
+          `${target.providerName} returned an empty response. Check the API key and model quota — free-tier Gemini keys are rate-limited and can return empty output.`
         );
       }
       return text;
     }
 
-    if (!this.client) {
+    if (!target.client) {
       throw new Error('No AI text provider configured');
     }
 
@@ -137,11 +207,11 @@ class AITextService {
     try {
       // Newer OpenAI models (gpt-5.x and later) reject the legacy max_tokens
       // parameter with a 400 error and require max_completion_tokens instead.
-      const response = await this.client.chat.completions.create({
+      const response = await target.client.chat.completions.create({
         ...params,
         max_completion_tokens: maxTokens,
       });
-      return this._extractContent(response);
+      return this._extractContent(response, target.providerName);
     } catch (error) {
       // Older models and some providers reject max_completion_tokens with a 400;
       // retry the same request using the legacy max_tokens spelling.
@@ -150,17 +220,17 @@ class AITextService {
         error.status === 400 &&
         /max(_completion)?_tokens/i.test(error.message || '')
       ) {
-        const response = await this.client.chat.completions.create({
+        const response = await target.client.chat.completions.create({
           ...params,
           max_tokens: maxTokens,
         });
-        return this._extractContent(response);
+        return this._extractContent(response, target.providerName);
       }
       throw error;
     }
   }
 
-  _extractContent(response) {
+  _extractContent(response, providerName = this.providerName) {
     const content =
       response &&
       response.choices &&
@@ -173,7 +243,7 @@ class AITextService {
       // A null/empty body used to surface as cryptic "Unexpected end of JSON input"
       // in the agents' JSON parsers. Report the real cause instead.
       throw new Error(
-        `${this.providerName} returned an empty response. Check the API key and model quota.`
+        `${providerName} returned an empty response. Check the API key and model quota.`
       );
     }
     return content;
@@ -184,4 +254,4 @@ class AITextService {
   }
 }
 
-module.exports = { AITextService, PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL };
+module.exports = { AITextService, PROVIDERS, OMNIROUTE_DEFAULT_BASE_URL, isLimitError, GEMINI_MODELS, GEMINI_DEFAULT_MODEL };
