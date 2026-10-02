@@ -106,23 +106,6 @@ const AI_PROVIDER_GUIDE = {
       credentials.aiProvider = { provider: 'glm', apiKey, model };
     },
     validationCreds: (apiKey, model) => ({ aiProvider: { provider: 'glm', apiKey, model } })
-  },
-  omniroute: {
-    label: 'OmniRoute — local gateway over many free-tier models',
-    keyUrl: 'http://localhost:20128/dashboard',
-    keyHint: 'from the OmniRoute dashboard (OmniRoute must be running)',
-    instructions: [
-      'Install and start OmniRoute: npm i -g omniroute, then run omniroute',
-      'Open the dashboard and create an API key',
-      'Set OMNIROUTE_BASE_URL in .env if it does not run on localhost:20128'
-    ],
-    models: [...PROVIDERS.omniroute.models],
-    defaultModel: PROVIDERS.omniroute.defaultModel,
-    covers: 'scripts only (narration, images and video keep their own keys)',
-    save(credentials, apiKey, model) {
-      credentials.aiProvider = { provider: 'omniroute', apiKey, model };
-    },
-    validationCreds: (apiKey, model) => ({ aiProvider: { provider: 'omniroute', apiKey, model } })
   }
 };
 

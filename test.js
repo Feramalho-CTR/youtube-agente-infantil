@@ -2404,39 +2404,82 @@ class SystemTest {
     }
 
     try {
-      // OMNIROUTE_API_KEY alone points at the local gateway with the "auto" model,
-      // and wins over any other text provider key.
+      // OmniRoute is the backup, not the main provider, when another key exists
       process.env.OPENROUTER_API_KEY = 'sk-or-test';
       process.env.OMNIROUTE_API_KEY = 'omni-test';
       let service = new AITextService({});
-      if (service.providerName !== 'OmniRoute') {
-        throw new Error(`OMNIROUTE_API_KEY should select OmniRoute, got ${service.providerName}`);
+      if (service.providerName !== 'OpenRouter') {
+        throw new Error(`The main provider should stay OpenRouter, got ${service.providerName}`);
       }
-      if (service.model !== 'auto') throw new Error(`OmniRoute default model should be auto, got ${service.model}`);
-      if (!String(service.client.baseURL).startsWith(OMNIROUTE_DEFAULT_BASE_URL)) {
-        throw new Error(`OmniRoute default base URL not used: ${service.client.baseURL}`);
+      if (!service.fallback || service.fallback.providerName !== 'OmniRoute' || service.fallback.model !== 'auto') {
+        throw new Error('OMNIROUTE_API_KEY should set OmniRoute (model auto) as the backup');
+      }
+      if (!String(service.fallback.client.baseURL).startsWith(OMNIROUTE_DEFAULT_BASE_URL)) {
+        throw new Error(`OmniRoute default base URL not used: ${service.fallback.client.baseURL}`);
+      }
+
+      const mainCalls = [];
+      const backupCalls = [];
+      service.client.chat.completions.create = async (params) => {
+        mainCalls.push(params);
+        const error = new Error('429 Rate limit exceeded');
+        error.status = 429;
+        throw error;
+      };
+      service.fallback.client.chat.completions.create = async (params) => {
+        backupCalls.push(params);
+        return { choices: [{ message: { content: 'from-omniroute' } }] };
+      };
+
+      // A rate-limited main provider switches to OmniRoute automatically
+      const result = await service.generateText('prompt', { skipChannelPolicy: true, model: 'z-ai/glm-5.3' });
+      if (result !== 'from-omniroute') throw new Error('Rate-limited request did not fall back to OmniRoute');
+      if (mainCalls.length !== 1 || backupCalls.length !== 1) {
+        throw new Error(`Expected one main and one backup call, got ${mainCalls.length}/${backupCalls.length}`);
+      }
+      if (backupCalls[0].model !== 'auto') {
+        throw new Error(`Backup must use the OmniRoute model, not the main one: ${backupCalls[0].model}`);
+      }
+
+      // Other errors (bad key, bad prompt) are not hidden behind the backup
+      service.client.chat.completions.create = async () => {
+        const error = new Error('401 Incorrect API key provided');
+        error.status = 401;
+        throw error;
+      };
+      let rethrown = false;
+      try {
+        await service.generateText('prompt', { skipChannelPolicy: true });
+      } catch (error) {
+        rethrown = /Incorrect API key/.test(error.message);
+      }
+      if (!rethrown || backupCalls.length !== 1) throw new Error('Non-limit errors must not use the OmniRoute backup');
+
+      // Quota messages without a status code (e.g. Gemini) also count as limits
+      service.client.chat.completions.create = async () => {
+        throw new Error('RESOURCE_EXHAUSTED: You exceeded your current quota');
+      };
+      if (await service.generateText('prompt', { skipChannelPolicy: true }) !== 'from-omniroute') {
+        throw new Error('Quota error did not fall back to OmniRoute');
       }
 
       // Base URL and model can be overridden from .env
       process.env.OMNIROUTE_BASE_URL = 'http://192.168.0.10:20128/v1';
       process.env.OMNIROUTE_MODEL = 'free/qwen';
-      service = new AITextService({});
-      if (!String(service.client.baseURL).startsWith('http://192.168.0.10:20128/v1')) {
-        throw new Error(`OMNIROUTE_BASE_URL was ignored: ${service.client.baseURL}`);
-      }
-      if (service.model !== 'free/qwen') throw new Error(`OMNIROUTE_MODEL was ignored: ${service.model}`);
-
-      // .env OmniRoute also wins over a provider saved by an earlier walkthrough
       service = new AITextService({ aiProvider: { provider: 'openrouter', apiKey: 'sk-or-saved', model: 'z-ai/glm-5.3' } });
-      if (service.providerName !== 'OmniRoute' || service.model !== 'free/qwen') {
-        throw new Error(`Saved provider overrode OMNIROUTE_API_KEY: ${service.providerName} / ${service.model}`);
+      if (service.providerName !== 'OpenRouter' || service.model !== 'z-ai/glm-5.3') {
+        throw new Error(`A saved provider must stay the main one: ${service.providerName} / ${service.model}`);
       }
+      if (!String(service.fallback.client.baseURL).startsWith('http://192.168.0.10:20128/v1')) {
+        throw new Error(`OMNIROUTE_BASE_URL was ignored: ${service.fallback.client.baseURL}`);
+      }
+      if (service.fallback.model !== 'free/qwen') throw new Error(`OMNIROUTE_MODEL was ignored: ${service.fallback.model}`);
 
-      // A walkthrough-saved OmniRoute credential still honors OMNIROUTE_MODEL
-      delete process.env.OMNIROUTE_API_KEY;
-      service = new AITextService({ aiProvider: { provider: 'omniroute', apiKey: 'omni-saved', model: 'auto' } });
-      if (service.providerName !== 'OmniRoute' || service.model !== 'free/qwen') {
-        throw new Error(`Saved OmniRoute ignored OMNIROUTE_MODEL: ${service.providerName} / ${service.model}`);
+      // With no other text provider, OmniRoute becomes the main one
+      delete process.env.OPENROUTER_API_KEY;
+      service = new AITextService({});
+      if (service.providerName !== 'OmniRoute' || service.model !== 'free/qwen' || service.fallback) {
+        throw new Error(`OmniRoute alone should be the main provider: ${service.providerName} / ${service.model}`);
       }
     } finally {
       for (const key of envKeys) {
@@ -2868,7 +2911,8 @@ class SystemTest {
       throw new Error('Walkthrough Gemini models drifted from the runtime catalog');
     }
 
-    for (const id of Object.keys(PROVIDERS)) {
+    for (const [id, preset] of Object.entries(PROVIDERS)) {
+      if (preset.fallbackOnly) continue; // configured in .env, not in the walkthrough
       if (JSON.stringify(AI_PROVIDER_GUIDE[id].models) !== JSON.stringify(PROVIDERS[id].models)) {
         throw new Error(`Walkthrough provider "${id}" models drifted from the runtime catalog`);
       }
