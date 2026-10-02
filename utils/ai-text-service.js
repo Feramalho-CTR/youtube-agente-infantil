@@ -78,8 +78,22 @@ class AITextService {
     const apiKey = credentials.aiProvider?.apiKey;
     const model = credentials.aiProvider?.model;
 
+    // A running OmniRoute gateway set in .env wins even over a provider saved
+    // by an earlier walkthrough, so switching to it only takes the .env line.
+    const omniroute = PROVIDERS.omniroute;
+    if (process.env[omniroute.envKey]) {
+      const savedModel = provider === 'omniroute' ? model : undefined;
+      return this._initOpenAICompatible(
+        omniroute,
+        process.env[omniroute.envKey],
+        process.env[omniroute.envModel] || savedModel
+      );
+    }
+
     if (provider && PROVIDERS[provider] && apiKey) {
-      return this._initOpenAICompatible(PROVIDERS[provider], apiKey, model);
+      const preset = PROVIDERS[provider];
+      const envModel = preset.envModel && process.env[preset.envModel];
+      return this._initOpenAICompatible(preset, apiKey, envModel || model);
     }
 
     for (const [, preset] of Object.entries(PROVIDERS)) {

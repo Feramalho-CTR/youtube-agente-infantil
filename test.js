@@ -2425,6 +2425,19 @@ class SystemTest {
         throw new Error(`OMNIROUTE_BASE_URL was ignored: ${service.client.baseURL}`);
       }
       if (service.model !== 'free/qwen') throw new Error(`OMNIROUTE_MODEL was ignored: ${service.model}`);
+
+      // .env OmniRoute also wins over a provider saved by an earlier walkthrough
+      service = new AITextService({ aiProvider: { provider: 'openrouter', apiKey: 'sk-or-saved', model: 'z-ai/glm-5.3' } });
+      if (service.providerName !== 'OmniRoute' || service.model !== 'free/qwen') {
+        throw new Error(`Saved provider overrode OMNIROUTE_API_KEY: ${service.providerName} / ${service.model}`);
+      }
+
+      // A walkthrough-saved OmniRoute credential still honors OMNIROUTE_MODEL
+      delete process.env.OMNIROUTE_API_KEY;
+      service = new AITextService({ aiProvider: { provider: 'omniroute', apiKey: 'omni-saved', model: 'auto' } });
+      if (service.providerName !== 'OmniRoute' || service.model !== 'free/qwen') {
+        throw new Error(`Saved OmniRoute ignored OMNIROUTE_MODEL: ${service.providerName} / ${service.model}`);
+      }
     } finally {
       for (const key of envKeys) {
         if (savedEnv[key] === undefined) {
