@@ -9,7 +9,22 @@ const GEMINI_MODELS = [
 ];
 const GEMINI_DEFAULT_MODEL = GEMINI_MODELS[0];
 
+const OMNIROUTE_DEFAULT_BASE_URL = 'http://localhost:20128/v1';
+
 const PROVIDERS = {
+  // OmniRoute (github.com/diegosouzapw/OmniRoute) is a local gateway that spreads
+  // requests across many free-tier providers. Listed first so a configured
+  // OMNIROUTE_API_KEY wins over any other text provider key in .env.
+  omniroute: {
+    name: 'OmniRoute',
+    get baseURL() {
+      return process.env.OMNIROUTE_BASE_URL || OMNIROUTE_DEFAULT_BASE_URL;
+    },
+    defaultModel: 'auto',
+    models: ['auto'],
+    envKey: 'OMNIROUTE_API_KEY',
+    envModel: 'OMNIROUTE_MODEL',
+  },
   openai: {
     name: 'OpenAI',
     baseURL: 'https://api.openai.com/v1',
@@ -70,7 +85,7 @@ class AITextService {
     for (const [, preset] of Object.entries(PROVIDERS)) {
       const key = process.env[preset.envKey];
       if (key) {
-        return this._initOpenAICompatible(preset, key);
+        return this._initOpenAICompatible(preset, key, preset.envModel && process.env[preset.envModel]);
       }
     }
 
@@ -184,4 +199,4 @@ class AITextService {
   }
 }
 
-module.exports = { AITextService, PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL };
+module.exports = { AITextService, PROVIDERS, OMNIROUTE_DEFAULT_BASE_URL, GEMINI_MODELS, GEMINI_DEFAULT_MODEL };

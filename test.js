@@ -43,6 +43,7 @@ class SystemTest {
       { name: 'Publishing Safety', test: () => this.testPublishingSafety() },
       { name: 'Multi-Provider Credential Validation', test: () => this.testCredentialValidation() },
       { name: 'AI Text Service Token Compatibility', test: () => this.testAITextServiceTokenParams() },
+      { name: 'OmniRoute Text Provider', test: () => this.testOmniRouteProvider() },
       { name: 'Placeholder Scheduling Guard', test: () => this.testPlaceholderSchedulingGuard() },
       { name: 'FFmpeg Resolution', test: () => this.testFFmpegResolution() },
       { name: 'Gemini Media Provider Selection', test: () => this.testGeminiMediaProvider() },
@@ -2385,6 +2386,54 @@ class SystemTest {
     }
 
     this.logger.info('Credential validation test completed successfully');
+  }
+
+  async testOmniRouteProvider() {
+    const { AITextService, PROVIDERS, OMNIROUTE_DEFAULT_BASE_URL } = require('./utils/ai-text-service');
+
+    const envKeys = [
+      ...Object.values(PROVIDERS).map(p => p.envKey),
+      'GEMINI_API_KEY',
+      'OMNIROUTE_BASE_URL',
+      'OMNIROUTE_MODEL'
+    ];
+    const savedEnv = {};
+    for (const key of envKeys) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+
+    try {
+      // OMNIROUTE_API_KEY alone points at the local gateway with the "auto" model,
+      // and wins over any other text provider key.
+      process.env.OPENROUTER_API_KEY = 'sk-or-test';
+      process.env.OMNIROUTE_API_KEY = 'omni-test';
+      let service = new AITextService({});
+      if (service.providerName !== 'OmniRoute') {
+        throw new Error(`OMNIROUTE_API_KEY should select OmniRoute, got ${service.providerName}`);
+      }
+      if (service.model !== 'auto') throw new Error(`OmniRoute default model should be auto, got ${service.model}`);
+      if (!String(service.client.baseURL).startsWith(OMNIROUTE_DEFAULT_BASE_URL)) {
+        throw new Error(`OmniRoute default base URL not used: ${service.client.baseURL}`);
+      }
+
+      // Base URL and model can be overridden from .env
+      process.env.OMNIROUTE_BASE_URL = 'http://192.168.0.10:20128/v1';
+      process.env.OMNIROUTE_MODEL = 'free/qwen';
+      service = new AITextService({});
+      if (!String(service.client.baseURL).startsWith('http://192.168.0.10:20128/v1')) {
+        throw new Error(`OMNIROUTE_BASE_URL was ignored: ${service.client.baseURL}`);
+      }
+      if (service.model !== 'free/qwen') throw new Error(`OMNIROUTE_MODEL was ignored: ${service.model}`);
+    } finally {
+      for (const key of envKeys) {
+        if (savedEnv[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = savedEnv[key];
+        }
+      }
+    }
   }
 
   async testAITextServiceTokenParams() {
